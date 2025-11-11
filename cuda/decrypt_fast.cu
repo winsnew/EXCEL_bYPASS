@@ -61,9 +61,11 @@ __device__ void generate_password(char* password, int max_len, unsigned int seed
     password[len < max_len ? len : max_len - 1] = '\0';
 }
 
+__device__ unsigned long long int attempt_count = 0;
+
 // Kernel 
 __global__ void brute_force_kernel(unsigned char* found, char* found_password, 
-                                  int* password_len) {
+                                  int* password_len, unsigned long long int* attempts) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     
     char password[16];
@@ -71,6 +73,8 @@ __global__ void brute_force_kernel(unsigned char* found, char* found_password,
     unsigned char plaintext[16] = {0}; 
     
     generate_password(password, 16, idx);
+    
+    atomicAdd(attempts, 1);
     
     rc4_encrypt((unsigned char*)password, strlen(password), 
                 plaintext, 16, encrypted);
@@ -97,18 +101,22 @@ int main() {
     unsigned char* d_found;
     char* d_found_password;
     int* d_password_len;
+    unsigned long long int* d_attempts;
     
     cudaMalloc(&d_found, sizeof(unsigned char));
     cudaMalloc(&d_found_password, 16 * sizeof(char));
     cudaMalloc(&d_password_len, sizeof(int));
+    cudaMalloc(&d_attempts, sizeof(unsigned long long int));
     
     unsigned char h_found = 0;
     char h_found_password[16] = {0};
     int h_password_len = 0;
+    unsigned long long int h_attempts = 0;
     
     cudaMemcpy(d_found, &h_found, sizeof(unsigned char), cudaMemcpyHostToDevice);
     cudaMemcpy(d_found_password, h_found_password, 16 * sizeof(char), cudaMemcpyHostToDevice);
     cudaMemcpy(d_password_len, &h_password_len, sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_attempts, &h_attempts, sizeof(unsigned long long int), cudaMemcpyHostToDevice);
     
     int blocks = 256;
     int threads_per_block = 256;
@@ -116,12 +124,32 @@ int main() {
     
     printf("Launching kernel with %d threads\n", total_threads);
     
-    brute_force_kernel<<<blocks, threads_per_block>>>(d_found, d_found_password, d_password_len);
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    cudaEventRecord(start);
+    
+    brute_force_kernel<<<blocks, threads_per_block>>>(d_found, d_found_password, d_password_len, d_attempts);
     cudaDeviceSynchronize();
+    
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, start, stop);
     
     cudaMemcpy(&h_found, d_found, sizeof(unsigned char), cudaMemcpyDeviceToHost);
     cudaMemcpy(h_found_password, d_found_password, 16 * sizeof(char), cudaMemcpyDeviceToHost);
     cudaMemcpy(&h_password_len, d_password_len, sizeof(int), cudaMemcpyDeviceToHost);
+    cudaMemcpy(&h_attempts, d_attempts, sizeof(unsigned long long int), cudaMemcpyDeviceToHost);
+    
+    float seconds = milliseconds / 1000.0f;
+    float attempts_per_second = (seconds > 0) ? (h_attempts / seconds) : 0;
+    
+    printf("\n=== RESULTS ===\n");
+    printf("Time elapsed: %.3f seconds\n", seconds);
+    printf("Total attempts: %llu\n", h_attempts);
+    printf("Speed: %.2f attempts/second\n", attempts_per_second);
     
     if (h_found) {
         printf("\n*** PASSWORD FOUND! ***\n");
@@ -129,12 +157,16 @@ int main() {
         printf("Length: %d\n", h_password_len);
     } else {
         printf("\nPassword not found in this attempt.\n");
-        printf("Try increasing the number of threads or modifying the password generation.\n");
+        printf("Try increasing the number of threads.\n");
     }
     
+    // Cleanup
     cudaFree(d_found);
     cudaFree(d_found_password);
     cudaFree(d_password_len);
+    cudaFree(d_attempts);
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
     
     return 0;
 }
