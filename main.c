@@ -1,19 +1,18 @@
-#include "common/excel_hash.h"
+#include "common/hash_extractor.h"
 
 void print_banner() {
-    printf("=============================================\n");
-    printf("       EXCEL PASSWORD RECOVERY TOOL\n");
-    printf("       Modern Encryption Support\n");
-    printf("=============================================\n");
+    printf("=========================================\n");
+    printf("     EXCEL HASH EXTRACTOR TOOL\n");
+    printf("     For Password Protected .XLS Files\n");
+    printf("=========================================\n");
 }
 
 void print_usage(const char *program_name) {
-    printf("Usage: %s <excel_file> [options]\n", program_name);
+    printf("Usage: %s <excel_file.xls> [options]\n", program_name);
     printf("Options:\n");
-    printf("  -w <wordlist>    Use custom wordlist file\n");
-    printf("  -d <dictionary>  Use dictionary attack\n");
-    printf("  -a               Analyze file only\n");
-    printf("  -h               Show this help\n");
+    printf("  -o <output>   Save hash to file\n");
+    printf("  -v            Verbose mode\n");
+    printf("  -h            Show this help\n");
 }
 
 int main(int argc, char *argv[]) {
@@ -23,14 +22,14 @@ int main(int argc, char *argv[]) {
     }
     
     const char *filename = argv[1];
-    const char *wordlist = "wordlist.txt";  
-    int analyze_only = 0;
-
+    const char *output_file = NULL;
+    int verbose = 0;
+    
     for (int i = 2; i < argc; i++) {
-        if (strcmp(argv[i], "-w") == 0 && i + 1 < argc) {
-            wordlist = argv[++i];
-        } else if (strcmp(argv[i], "-a") == 0) {
-            analyze_only = 1;
+        if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
+            output_file = argv[++i];
+        } else if (strcmp(argv[i], "-v") == 0) {
+            verbose = 1;
         } else if (strcmp(argv[i], "-h") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -38,33 +37,34 @@ int main(int argc, char *argv[]) {
     }
     
     print_banner();
-    printf("File: %s\n", filename);
+    printf("Processing: %s\n", filename);
     
-    ExcelFile *excel_file = read_excel_file(filename);
-    if (!excel_file) {
+    XLSFile *xls_file = read_xls_file(filename);
+    if (!xls_file) {
         return 1;
     }
     
-    analyze_encryption(excel_file);
+    printf("File size: %zu bytes\n", xls_file->size);
     
-    if (analyze_only) {
-        free_excel_file(excel_file);
-        return 0;
-    }
-    
-    if (excel_file->is_encrypted) {
-        dictionary_attack(excel_file, wordlist);
+    if (extract_xls_hash(xls_file)) {
+        print_hash_info(xls_file);
+        
+        if (output_file) {
+            save_hash_to_file(xls_file, output_file);
+        }
+        
+        printf("\nHash extraction successful!\n");
+        printf("You can now use cracking tools like:\n");
+        printf("  john --format=office hash.txt\n");
+        printf("  hashcat -m 9400 hash.txt wordlist.txt\n");
     } else {
-        printf("\nFile is not encrypted. No password recovery needed.\n");
+        printf("\nFailed to extract hash\n");
+        printf("Possible reasons:\n");
+        printf("  - File not password protected\n");
+        printf("  - Unsupported Excel version\n");
+        printf("  - File corrupted\n");
     }
     
-    free_excel_file(excel_file);
+    free_xls_file(xls_file);
     return 0;
-}
-
-void free_excel_file(ExcelFile *file) {
-    if (file) {
-        free(file->data);
-        free(file);
-    }
 }
