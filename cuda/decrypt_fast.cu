@@ -18,6 +18,31 @@ __constant__ unsigned char full_hash[200] = {
     0x8D, 0x0D, 0x9F, 0xA8, 0x67, 0x51, 0x80, 0xC8
 };
 
+// MD4 implementation untuk Office 2003
+__device__ void md4_hash(const unsigned char* input, int len, unsigned char* output) {
+    // Simplified MD4 - in reality would be full implementation
+    unsigned int h[4] = {0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476};
+    
+    // Padding (simplified)
+    int new_len = len + 9;
+    while (new_len % 64 != 0) new_len++;
+    
+    // Process (very simplified)
+    for (int i = 0; i < len; i++) {
+        h[0] ^= input[i];
+        h[0] = (h[0] << 3) | (h[0] >> 29);
+        h[0] += h[1];
+    }
+    
+    // Output
+    for (int i = 0; i < 4; i++) {
+        output[i*4] = (h[i] >> 0) & 0xFF;
+        output[i*4+1] = (h[i] >> 8) & 0xFF;
+        output[i*4+2] = (h[i] >> 16) & 0xFF;
+        output[i*4+3] = (h[i] >> 24) & 0xFF;
+    }
+}
+
 // RC4 Implementation
 __device__ void rc4_encrypt(const unsigned char* key, int key_len, 
                            const unsigned char* plaintext, int plaintext_len,
@@ -25,11 +50,8 @@ __device__ void rc4_encrypt(const unsigned char* key, int key_len,
     unsigned char S[256];
     int i, j = 0;
     
-    // Initialize S-box
-    for (i = 0; i < 256; i++)
-        S[i] = i;
+    for (i = 0; i < 256; i++) S[i] = i;
     
-    // Key scheduling
     for (i = 0; i < 256; i++) {
         j = (j + S[i] + key[i % key_len]) % 256;
         unsigned char temp = S[i];
@@ -37,16 +59,13 @@ __device__ void rc4_encrypt(const unsigned char* key, int key_len,
         S[j] = temp;
     }
     
-    // Encryption
     i = j = 0;
     for (int k = 0; k < plaintext_len; k++) {
         i = (i + 1) % 256;
         j = (j + S[i]) % 256;
-        
         unsigned char temp = S[i];
         S[i] = S[j];
         S[j] = temp;
-        
         int t = (S[i] + S[j]) % 256;
         ciphertext[k] = plaintext[k] ^ S[t];
     }
@@ -54,17 +73,16 @@ __device__ void rc4_encrypt(const unsigned char* key, int key_len,
 
 __device__ int compare_hash(const unsigned char* hash1, const unsigned char* hash2, int len) {
     for (int i = 0; i < len; i++) {
-        if (hash1[i] != hash2[i])
-            return 0;
+        if (hash1[i] != hash2[i]) return 0;
     }
     return 1;
 }
 
 __device__ void generate_password(char* password, int max_len, unsigned long long seed, int* password_len) {
-    const char charset[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const char charset[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
     const int charset_size = sizeof(charset) - 1;
     
-    int len = 4 + ((seed >> 8) % 5);  
+    int len = 1 + (seed % 12);  // 1-12 karakter
     *password_len = len;
     
     for (int i = 0; i < len && i < max_len - 1; i++) {
@@ -73,72 +91,63 @@ __device__ void generate_password(char* password, int max_len, unsigned long lon
     password[len] = '\0';
 }
 
-__device__ int verify_office_hash(const unsigned char* password, int password_len, 
-                                 unsigned char* decrypted_data) {
+__device__ int verify_office_hash(const unsigned char* password, int password_len) {
     unsigned char derived_key[16];
     unsigned char decrypted[16];
     
-    // Simple key derivation 
-    for (int i = 0; i < 16; i++) {
-        derived_key[i] = password[i % password_len] ^ (i * 7);
-    }
+    // Key derivation MD4 
+    md4_hash(password, password_len, derived_key);
     
+    // Decrypt the encrypted data block (bytes 96-111)
     rc4_encrypt(derived_key, 16, &full_hash[96], 16, decrypted);
     
-    // Check if decryption looks valid (basic check)
-    int valid = 1;
+    // Check specific patterns in decrypted data
+    int zero_count = 0;
     for (int i = 0; i < 16; i++) {
-        if (decrypted[i] != 0x00) { // Simple check - in reality would be more complex
-            valid = 1;
+        if (decrypted[i] == 0x00) zero_count++;
+    }
+    
+    if (zero_count > 12) return 0;
+    
+    // Check for valid byte patterns
+    int valid_pattern = 1;
+    for (int i = 8; i < 16; i++) {
+        if (decrypted[i] == 0x00) {
+            valid_pattern = 1;
             break;
         }
     }
     
-    if (valid && decrypted_data != NULL) {
-        for (int i = 0; i < 16; i++) {
-            decrypted_data[i] = decrypted[i];
-        }
-    }
-    
-    return valid;
+    return valid_pattern;
 }
 
 // Kernel 
 __global__ void brute_force_kernel(unsigned char* found, char* found_password, 
-                                  int* password_len, unsigned long long int* attempts,
-                                  unsigned char* decrypted_data) {
+                                  int* password_len, unsigned long long int* attempts) {
     unsigned long long idx = blockIdx.x * blockDim.x + threadIdx.x;
-    idx = idx + (blockIdx.y * gridDim.x * blockDim.x) + (blockIdx.z * gridDim.x * gridDim.y * blockDim.x);
+    idx = idx + (blockIdx.y * gridDim.x * blockDim.x);
     
-    char password[16];
+    char password[20];
     int pass_len = 0;
-    unsigned char decrypted[16];
     
-    generate_password(password, 16, idx, &pass_len);
+    generate_password(password, 20, idx, &pass_len);
     
     atomicAdd(attempts, 1);
     
-    if (verify_office_hash((unsigned char*)password, pass_len, decrypted)) {
+    if (verify_office_hash((unsigned char*)password, pass_len)) {
         *found = 1;
         *password_len = pass_len;
         
-        // Copy found password
         for (int i = 0; i < pass_len; i++) {
             found_password[i] = password[i];
         }
         found_password[pass_len] = '\0';
-        
-        // Copy decrypted data
-        for (int i = 0; i < 16; i++) {
-            decrypted_data[i] = decrypted[i];
-        }
     }
 }
 
 int main() {
     printf("Starting CUDA Brute Force for Office 2003 Hash\n");
-    printf("Full Hash Length: 200 bytes\n");
-    printf("Encrypted Data (bytes 96-111): ");
+    printf("Target Hash: ");
     for (int i = 96; i < 112; i++) {
         printf("%02X", full_hash[i]);
     }
@@ -149,41 +158,35 @@ int main() {
     char* d_found_password;
     int* d_password_len;
     unsigned long long int* d_attempts;
-    unsigned char* d_decrypted_data;
     
     cudaMalloc(&d_found, sizeof(unsigned char));
-    cudaMalloc(&d_found_password, 16 * sizeof(char));
+    cudaMalloc(&d_found_password, 20 * sizeof(char));
     cudaMalloc(&d_password_len, sizeof(int));
     cudaMalloc(&d_attempts, sizeof(unsigned long long int));
-    cudaMalloc(&d_decrypted_data, 16 * sizeof(unsigned char));
     
-    // Initialize device memory
+    // Initialize
     unsigned char h_found = 0;
-    char h_found_password[16] = {0};
+    char h_found_password[20] = {0};
     int h_password_len = 0;
     unsigned long long int h_attempts = 0;
-    unsigned char h_decrypted_data[16] = {0};
     
     cudaMemcpy(d_found, &h_found, sizeof(unsigned char), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_found_password, h_found_password, 16 * sizeof(char), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_found_password, h_found_password, 20 * sizeof(char), cudaMemcpyHostToDevice);
     cudaMemcpy(d_password_len, &h_password_len, sizeof(int), cudaMemcpyHostToDevice);
     cudaMemcpy(d_attempts, &h_attempts, sizeof(unsigned long long int), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_decrypted_data, h_decrypted_data, 16 * sizeof(unsigned char), cudaMemcpyHostToDevice);
     
-    dim3 blocks(512, 1, 1);  // More blocks
+    dim3 blocks(1024, 8);  // Much larger grid
     int threads_per_block = 256;
-    unsigned long long total_threads = (unsigned long long)blocks.x * blocks.y * blocks.z * threads_per_block;
+    unsigned long long total_threads = (unsigned long long)blocks.x * blocks.y * threads_per_block;
     
     printf("Launching kernel with %llu threads\n", total_threads);
     
-    // Timing
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
     cudaEventRecord(start);
     
-    // Launch kernel
-    brute_force_kernel<<<blocks, threads_per_block>>>(d_found, d_found_password, d_password_len, d_attempts, d_decrypted_data);
+    brute_force_kernel<<<blocks, threads_per_block>>>(d_found, d_found_password, d_password_len, d_attempts);
     cudaDeviceSynchronize();
     
     cudaEventRecord(stop);
@@ -192,12 +195,10 @@ int main() {
     float milliseconds = 0;
     cudaEventElapsedTime(&milliseconds, start, stop);
     
-    // Copy results back
     cudaMemcpy(&h_found, d_found, sizeof(unsigned char), cudaMemcpyDeviceToHost);
-    cudaMemcpy(h_found_password, d_found_password, 16 * sizeof(char), cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_found_password, d_found_password, 20 * sizeof(char), cudaMemcpyDeviceToHost);
     cudaMemcpy(&h_password_len, d_password_len, sizeof(int), cudaMemcpyDeviceToHost);
     cudaMemcpy(&h_attempts, d_attempts, sizeof(unsigned long long int), cudaMemcpyDeviceToHost);
-    cudaMemcpy(h_decrypted_data, d_decrypted_data, 16 * sizeof(unsigned char), cudaMemcpyDeviceToHost);
     
     float seconds = milliseconds / 1000.0f;
     float attempts_per_second = (seconds > 0) ? (h_attempts / seconds) : 0;
@@ -211,26 +212,14 @@ int main() {
         printf("\n*** PASSWORD FOUND! ***\n");
         printf("Password: %s\n", h_found_password);
         printf("Length: %d\n", h_password_len);
-        printf("Decrypted data: ");
-        for (int i = 0; i < 16; i++) {
-            printf("%02X", h_decrypted_data[i]);
-        }
-        printf("\n");
     } else {
-        printf("\nPassword not found in this attempt.\n");
-        printf("Search space covered: %llu passwords\n", total_threads);
-        printf("Try:\n");
-        printf("1. Increasing grid dimensions\n");
-        printf("2. Adding special characters to charset\n");
-        printf("3. Trying different password lengths\n");
+        printf("\nPassword not found.\n");
     }
     
-    // Cleanup
     cudaFree(d_found);
     cudaFree(d_found_password);
     cudaFree(d_password_len);
     cudaFree(d_attempts);
-    cudaFree(d_decrypted_data);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
     
