@@ -7,7 +7,7 @@
 #include <stdint.h>
 
 #define XLS_SIGNATURE 0xE011CFD0  // D0 CF 11 E0
-#define MAX_HASH_LENGTH 256
+#define MAX_HASH_LENGTH 2048  
 
 typedef struct {
     uint8_t *data;
@@ -30,5 +30,6 @@ int find_encryption_header(XLSFile *file);
 int extract_office_2003_hash(XLSFile *file);
 int extract_office_2007plus_hash(XLSFile *file);
 void save_hash_to_file(XLSFile *file, const char *output_file);
+void print_complete_hash(XLSFile *file); 
 
 #endif
