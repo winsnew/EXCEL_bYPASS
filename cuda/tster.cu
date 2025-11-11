@@ -17,12 +17,10 @@ std::mutex key_mutex;
 std::condition_variable key_cv;
 std::string found_key_str;
 
-
 struct KeyBatch {
     std::vector<const char*> keys;
     int key_length;
 };
-
 
 std::vector<const char*> generate_key_batch(const std::vector<std::string>& base_keys,
                                           const std::vector<std::string>& suffixes,
@@ -55,7 +53,6 @@ std::vector<const char*> generate_key_batch(const std::vector<std::string>& base
     return keys;
 }
 
-
 void free_keys(std::vector<const char*>& keys) {
     for (const char* key : keys) {
         delete[] key;
@@ -72,9 +69,11 @@ void brute_force_worker(const char* encrypted_file, const char* output_dir,
     
     while (!key_found) {
         int current_offset;
+        int batch_number;
         {
             std::lock_guard<std::mutex> lock(key_mutex);
             current_offset = current_batch * batch_size;
+            batch_number = current_batch.load(); 
             current_batch++;
         }
         
@@ -84,15 +83,13 @@ void brute_force_worker(const char* encrypted_file, const char* output_dir,
             break; // No more keys to generate
         }
         
-        printf("🔍 Worker memproses batch %d dengan %zu keys...\n", current_batch, keys.size());
+        printf("🔍 Worker memproses batch %d dengan %zu keys...\n", batch_number, keys.size());
         
-        // Calculate maximum key length for this batch
         int key_length = 0;
         for (const char* key : keys) {
             key_length = std::max(key_length, (int)strlen(key));
         }
         
-        // Execute brute force
         cudaError_t status = rc4_bruteforce_excel_file(encrypted_file, output_dir,
                                                       keys.data(), keys.size(),
                                                       key_length, found_key, sizeof(found_key));
@@ -116,7 +113,6 @@ void brute_force_worker(const char* encrypted_file, const char* output_dir,
     }
 }
 
-
 std::vector<std::string> generate_comprehensive_base_keys() {
     return {
         // Common passwords
@@ -135,16 +131,13 @@ std::vector<std::string> generate_comprehensive_base_keys() {
         "eval", "Eval", "EVAL", "evaluation", "Evaluation", "EVALUATION",
         "demo", "Demo", "DEMO",
         
-        // Key related
         "key", "Key", "KEY", "secret", "Secret", "SECRET",
         "pass", "Pass", "PASS", "code", "Code", "CODE",
         "cipher", "Cipher", "CIPHER",
         
-        // Company/organization
         "company", "Company", "COMPANY", "corp", "Corp", "CORP",
         "business", "Business", "BUSINESS", "enterprise", "Enterprise", "ENTERPRISE",
         
-        // Numbers only
         "123", "1234", "12345", "123456", "1234567", "12345678", "123456789", "1234567890",
         "111", "1111", "11111", "111111",
         "000", "0000", "00000", "000000",
@@ -153,7 +146,13 @@ std::vector<std::string> generate_comprehensive_base_keys() {
         "hello", "Hello", "HELLO", "world", "World", "WORLD",
         "welcome", "Welcome", "WELCOME", "access", "Access", "ACCESS",
         "default", "Default", "DEFAULT", "temp", "Temp", "TEMP",
-        "backup", "Backup", "BACKUP", "restore", "Restore", "RESTORE"
+        "backup", "Backup", "BACKUP", "restore", "Restore", "RESTORE",
+        
+        // Original keys
+        "MySecretKey", "mysecretkey", "MYSECRETKEY", "SecretKey", "secretkey",
+        "Password", "password", "PASSWORD", "Key", "key", "KEY",
+        "Admin", "admin", "ADMIN", "Test", "test", "TEST",
+        "123456", "12345678", "123456789", "1234567890", "trial", "Trial", "TRIAL"
     };
 }
 
@@ -169,7 +168,6 @@ std::vector<std::string> generate_comprehensive_suffixes() {
         "2019", "2018", "2017", "2016", "2015",
         
         "!", "!!", "!!!", "@", "#", "$", "%", "^", "&", "*", "()", "{}", "[]",
-        "!", "!!", "!!!", "@", "#", "$", "%", "^", "&", "*",
         
         "!1", "!12", "!123", "!1234",
         "@1", "@12", "@123", "@1234",
@@ -187,7 +185,6 @@ std::vector<std::string> generate_comprehensive_prefixes() {
         "ms", "MS", "ms_", "MS_", "_", "-"
     };
 }
-
 
 class SmartKeyGenerator {
 private:
@@ -220,7 +217,6 @@ public:
             }
         }
         
-
         auto base_keys = generate_comprehensive_base_keys();
         auto suffixes = generate_comprehensive_suffixes();
         
@@ -231,7 +227,6 @@ public:
                 if (keys.size() >= count) break;
                 
                 std::string key = base + suffix;
-                // Skip if this pattern previously failed
                 if (std::find(failed_patterns.begin(), failed_patterns.end(), key) == failed_patterns.end()) {
                     keys.push_back(key);
                 }
@@ -291,10 +286,6 @@ int main() {
         printf("\n🎉 BRUTE FORCE BERHASIL!\n");
         printf("✅ Key yang ditemukan: '%s'\n", found_key_str.c_str());
         printf("✅ File telah didekripsi: ./decrypted_with_%s.xls\n", found_key_str.c_str());
-        
-        // Verify the decryption
-        printf("🔍 Memverifikasi file terdekripsi...\n");
-
         
         return 0;
     } else {
