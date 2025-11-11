@@ -33,6 +33,12 @@ __global__ void rc4_decrypt_kernel(uint8_t* data, size_t data_size, const char* 
 __global__ void rc4_init_kernel(RC4State* state, const char* key, size_t key_length);
 __global__ void rc4_process_kernel(RC4State* state, uint8_t* data, size_t data_size);
 
+__global__ void rc4_bruteforce_kernel(uint8_t* d_data, size_t data_size, char* d_keys, 
+                                     int num_keys, int key_length, bool* d_found, int* d_found_index);
+cudaError_t rc4_bruteforce_excel_file(const char* input_file, const char* output_dir, 
+                                    const char** keys, int num_keys, int key_length, 
+                                    char* found_key, int max_key_length);
+
 cudaError_t rc4_encrypt_excel_file(const char* input_file, const char* output_file, const char* key);
 cudaError_t rc4_decrypt_excel_file(const char* input_file, const char* output_file, const char* key);
 
@@ -40,5 +46,6 @@ cudaError_t rc4_decrypt_excel_file(const char* input_file, const char* output_fi
 cudaError_t read_file_to_gpu(const char* filename, uint8_t** d_data, size_t* file_size);
 cudaError_t write_file_from_gpu(const char* filename, const uint8_t* d_data, size_t file_size);
 bool is_excel_file(const uint8_t* data, size_t size);
+bool verify_decrypted_file(const uint8_t* data, size_t size);
 
 #endif // CUDA_UTILS_CUH
