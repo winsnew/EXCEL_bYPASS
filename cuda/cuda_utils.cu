@@ -49,7 +49,6 @@ __global__ void rc4_process_kernel(RC4State* state, uint8_t* data, size_t data_s
         
         uint8_t k = local_state.S[(local_state.S[local_state.i] + local_state.S[local_state.j]) % 256];
         
-        
         data[pos] ^= k;
     }
     
@@ -103,7 +102,45 @@ __global__ void rc4_encrypt_kernel(uint8_t* data, size_t data_size, const char* 
 }
 
 __global__ void rc4_decrypt_kernel(uint8_t* data, size_t data_size, const char* key, size_t key_length) {
-    rc4_encrypt_kernel<<<gridDim, blockDim>>>(data, data_size, key, key_length);
+    RC4State state;
+    
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
+        for (int i = 0; i < 256; i++) {
+            state.S[i] = i;
+        }
+        
+        uint8_t j = 0;
+        for (int i = 0; i < 256; i++) {
+            j = (j + state.S[i] + key[i % key_length]) % 256;
+            uint8_t temp = state.S[i];
+            state.S[i] = state.S[j];
+            state.S[j] = temp;
+        }
+        state.i = 0;
+        state.j = 0;
+    }
+    __syncthreads();
+    
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    int stride = blockDim.x * gridDim.x;
+    
+    __shared__ RC4State local_state;
+    if (threadIdx.x == 0) {
+        local_state = state;
+    }
+    __syncthreads();
+    
+    for (int pos = idx; pos < data_size; pos += stride) {
+        local_state.i = (local_state.i + 1) % 256;
+        local_state.j = (local_state.j + local_state.S[local_state.i]) % 256;
+        
+        uint8_t temp = local_state.S[local_state.i];
+        local_state.S[local_state.i] = local_state.S[local_state.j];
+        local_state.S[local_state.j] = temp;
+        
+        uint8_t k = local_state.S[(local_state.S[local_state.i] + local_state.S[local_state.j]) % 256];
+        data[pos] ^= k;
+    }
 }
 
 cudaError_t read_file_to_gpu(const char* filename, uint8_t** d_data, size_t* file_size) {
@@ -171,10 +208,6 @@ cudaError_t rc4_encrypt_excel_file(const char* input_file, const char* output_fi
     
     std::vector<uint8_t> header(8);
     cudaMemcpy(header.data(), d_data, 8, cudaMemcpyDeviceToHost);
-    if (!is_excel_file(header.data(), 8)) {
-        cudaFree(d_data);
-        return cudaErrorInvalidValue;
-    }
     
     size_t key_length = strlen(key);
     char* d_key = nullptr;
@@ -221,7 +254,56 @@ cudaError_t rc4_encrypt_excel_file(const char* input_file, const char* output_fi
 }
 
 cudaError_t rc4_decrypt_excel_file(const char* input_file, const char* output_file, const char* key) {
-    return rc4_encrypt_excel_file(input_file, output_file, key);
+    uint8_t* d_data = nullptr;
+    size_t file_size;
+    
+    cudaError_t cudaStatus = read_file_to_gpu(input_file, &d_data, &file_size);
+    if (cudaStatus != cudaSuccess) {
+        return cudaStatus;
+    }
+    
+    
+    size_t key_length = strlen(key);
+    char* d_key = nullptr;
+    
+    cudaStatus = cudaMalloc(&d_key, key_length);
+    if (cudaStatus != cudaSuccess) {
+        cudaFree(d_data);
+        return cudaStatus;
+    }
+    cudaStatus = cudaMemcpy(d_key, key, key_length, cudaMemcpyHostToDevice);
+    if (cudaStatus != cudaSuccess) {
+        cudaFree(d_data);
+        cudaFree(d_key);
+        return cudaStatus;
+    }
+    
+    int blockSize = 256;
+    int numBlocks = (file_size + blockSize - 1) / blockSize;
+    
+    rc4_decrypt_kernel<<<numBlocks, blockSize>>>(d_data, file_size, d_key, key_length);
+    
+    cudaStatus = cudaGetLastError();
+    if (cudaStatus != cudaSuccess) {
+        cudaFree(d_data);
+        cudaFree(d_key);
+        return cudaStatus;
+    }
+    
+    cudaStatus = cudaDeviceSynchronize();
+    if (cudaStatus != cudaSuccess) {
+        cudaFree(d_data);
+        cudaFree(d_key);
+        return cudaStatus;
+    }
+    
+    cudaStatus = write_file_from_gpu(output_file, d_data, file_size);
+    
+    // Cleanup
+    cudaFree(d_data);
+    cudaFree(d_key);
+    
+    return cudaStatus;
 }
 
 // testing
