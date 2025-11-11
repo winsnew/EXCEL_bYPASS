@@ -1,10 +1,10 @@
-CXX = g++
+CXX = gcc
 CXXFLAGS = -O3 -Wall -Wextra
 TARGET = excel_bypass
 SRCDIR = .
 COMMONDIR = common
 
-SOURCES = $(SRCDIR)/main.c $(COMMONDIR)/file_util.c
+SOURCES = $(SRCDIR)/main.c $(COMMONDIR)/file_util.c $(COMMONDIR)/engine.c
 INCLUDES = -I$(COMMONDIR)
 
 $(TARGET): $(SOURCES)
