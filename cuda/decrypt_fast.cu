@@ -7,6 +7,14 @@ __constant__ unsigned char target_hash[16] = {
     0x1F, 0xFC, 0x4B, 0x82, 0x34, 0x6B, 0xB0, 0x6D
 };
 
+__device__ int my_strlen(const char* str) {
+    int len = 0;
+    while (str[len] != '\0') {
+        len++;
+    }
+    return len;
+}
+
 // RC4 
 __device__ void rc4_encrypt(const unsigned char* key, int key_len, 
                            const unsigned char* plaintext, int plaintext_len,
@@ -49,19 +57,18 @@ __device__ int compare_hash(const unsigned char* hash1, const unsigned char* has
     return 1;
 }
 
-__device__ void generate_password(char* password, int max_len, unsigned int seed) {
+__device__ void generate_password(char* password, int max_len, unsigned int seed, int* password_len) {
     const char charset[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     const int charset_size = sizeof(charset) - 1;
     
     int len = 4 + (seed % 5);
+    *password_len = len;
     
     for (int i = 0; i < len && i < max_len - 1; i++) {
         password[i] = charset[(seed + i * 7919) % charset_size];
     }
     password[len < max_len ? len : max_len - 1] = '\0';
 }
-
-__device__ unsigned long long int attempt_count = 0;
 
 // Kernel 
 __global__ void brute_force_kernel(unsigned char* found, char* found_password, 
@@ -70,23 +77,23 @@ __global__ void brute_force_kernel(unsigned char* found, char* found_password,
     
     char password[16];
     unsigned char encrypted[16];
-    unsigned char plaintext[16] = {0}; 
+    unsigned char plaintext[16] = {0};
+    int pass_len = 0;
     
-    generate_password(password, 16, idx);
+    generate_password(password, 16, idx, &pass_len);
     
     atomicAdd(attempts, 1);
     
-    rc4_encrypt((unsigned char*)password, strlen(password), 
+    rc4_encrypt((unsigned char*)password, pass_len, 
                 plaintext, 16, encrypted);
     
     if (compare_hash(encrypted, target_hash, 16)) {
         *found = 1;
-        int len = strlen(password);
-        *password_len = len;
-        for (int i = 0; i < len; i++) {
+        *password_len = pass_len;
+        for (int i = 0; i < pass_len; i++) {
             found_password[i] = password[i];
         }
-        found_password[len] = '\0';
+        found_password[pass_len] = '\0';
     }
 }
 
@@ -98,6 +105,7 @@ int main() {
     }
     printf("\n");
     
+    // Allocate device memory
     unsigned char* d_found;
     char* d_found_password;
     int* d_password_len;
@@ -108,6 +116,7 @@ int main() {
     cudaMalloc(&d_password_len, sizeof(int));
     cudaMalloc(&d_attempts, sizeof(unsigned long long int));
     
+    // Initialize device memory
     unsigned char h_found = 0;
     char h_found_password[16] = {0};
     int h_password_len = 0;
@@ -124,11 +133,13 @@ int main() {
     
     printf("Launching kernel with %d threads\n", total_threads);
     
+    // Timing
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
     cudaEventRecord(start);
     
+    // Launch kernel
     brute_force_kernel<<<blocks, threads_per_block>>>(d_found, d_found_password, d_password_len, d_attempts);
     cudaDeviceSynchronize();
     
