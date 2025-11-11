@@ -1,40 +1,45 @@
 #ifndef EXCEL_HASH_H
 #define EXCEL_HASH_H
 
-#include <cstdint>
-#include <string>
-#include <vector>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <time.h>
 
-class ExcelHash {
-public:
-    static uint16_t computeExcelHash(const std::string& password) {
-        uint16_t hash = 0;
-        for (char c : password) {
-            hash = ((hash >> 14) & 0x01) | ((hash << 1) & 0x7FFF);
-            hash ^= c;
-        }
-        hash = ((hash >> 14) & 0x01) | ((hash << 1) & 0x7FFF);
-        hash ^= password.length();
-        hash ^= 0xCE4B;
-        return hash;
-    }
+#define MAX_PASSWORD_LEN 256
+#define BUFFER_SIZE 1048576  // 1MB
 
-    static void simpleDecrypt(std::vector<char>& buffer, const std::string& password) {
-        if (password.empty()) return;
-        
-        size_t passLen = password.length();
-        for (size_t i = 0; i < buffer.size(); i++) {
-            buffer[i] ^= password[i % passLen];
-        }
-    }
+typedef struct {
+    uint8_t *data;
+    size_t size;
+    int is_encrypted;
+    int encryption_type;
+    char encryption_provider[128];
+} ExcelFile;
 
-    static bool hasExcelSignature(const std::vector<char>& buffer) {
-        if (buffer.size() < 8) return false;
-        return (buffer[0] == 0xD0 && buffer[1] == 0xCF &&
-                buffer[2] == 0x11 && buffer[3] == 0xE0 &&
-                buffer[4] == 0xA1 && buffer[5] == 0xB1 &&
-                buffer[6] == 0x1A && buffer[7] == 0xE1);
-    }
-};
+// Structure untuk brute force context
+typedef struct {
+    char **passwords;
+    size_t count;
+    size_t current_index;
+    int found;
+    char password[MAX_PASSWORD_LEN];
+    clock_t start_time;
+} BruteForceContext;
+
+// Function prototypes
+ExcelFile* read_excel_file(const char *filename);
+void analyze_encryption(ExcelFile *file);
+int detect_encryption_type(ExcelFile *file);
+void brute_force_excel(ExcelFile *file, const char *wordlist_file);
+void dictionary_attack(ExcelFile *file, const char *dict_file);
+void mask_attack(ExcelFile *file, const char *mask);
+void free_excel_file(ExcelFile *file);
+
+// Modern Excel encryption functions
+int try_decrypt_modern(ExcelFile *file, const char *password);
+int extract_encryption_info(ExcelFile *file);
+void generate_wordlist_combinations();
 
 #endif
