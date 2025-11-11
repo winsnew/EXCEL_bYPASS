@@ -13,6 +13,7 @@
 
 std::atomic<bool> key_found(false);
 std::atomic<int> current_batch(0);
+std::atomic<int> total_tested(0);
 std::mutex key_mutex;
 std::condition_variable key_cv;
 std::string found_key_str;
@@ -80,10 +81,13 @@ void brute_force_worker(const char* encrypted_file, const char* output_dir,
         std::vector<const char*> keys = generate_key_batch(base_keys, suffixes, prefixes, batch_size, current_offset);
         
         if (keys.empty()) {
-            break; // No more keys to generate
+            break;
         }
         
-        printf("🔍 Worker memproses batch %d dengan %zu keys...\n", batch_number, keys.size());
+        // Simple one-line output
+        printf("\r🔍 Testing batch %d (%d keys)... Total tested: %d", 
+               batch_number, (int)keys.size(), total_tested.load());
+        fflush(stdout);
         
         int key_length = 0;
         for (const char* key : keys) {
@@ -93,6 +97,8 @@ void brute_force_worker(const char* encrypted_file, const char* output_dir,
         cudaError_t status = rc4_bruteforce_excel_file(encrypted_file, output_dir,
                                                       keys.data(), keys.size(),
                                                       key_length, found_key, sizeof(found_key));
+        
+        total_tested += keys.size();
         
         // Cleanup
         free_keys(keys);
@@ -109,8 +115,100 @@ void brute_force_worker(const char* encrypted_file, const char* output_dir,
             break;
         }
         
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
+}
+
+
+cudaError_t rc4_bruteforce_excel_file_quiet(const char* input_file, const char* output_dir, 
+                                           const char** keys, int num_keys, int key_length, 
+                                           char* found_key, int max_key_length) {
+    uint8_t* d_data = nullptr;
+    size_t file_size;
+    
+    cudaError_t cudaStatus = read_file_to_gpu(input_file, &d_data, &file_size);
+    if (cudaStatus != cudaSuccess) {
+        return cudaStatus;
+    }
+    
+    char* d_keys = nullptr;
+    size_t keys_size = num_keys * key_length;
+    cudaStatus = cudaMalloc(&d_keys, keys_size);
+    if (cudaStatus != cudaSuccess) {
+        cudaFree(d_data);
+        return cudaStatus;
+    }
+    
+    for (int i = 0; i < num_keys; i++) {
+        cudaMemcpy(d_keys + i * key_length, keys[i], key_length, cudaMemcpyHostToDevice);
+    }
+    
+    bool* d_found = nullptr;
+    int* d_found_index = nullptr;
+    bool h_found = false;
+    int h_found_index = -1;
+    
+    cudaMalloc(&d_found, sizeof(bool));
+    cudaMalloc(&d_found_index, sizeof(int));
+    
+    cudaMemset(d_found, 0, sizeof(bool));
+    cudaMemset(d_found_index, -1, sizeof(int));
+    
+    int blockSize = 256;
+    int numBlocks = (num_keys + blockSize - 1) / blockSize;
+    
+    rc4_bruteforce_kernel<<<numBlocks, blockSize>>>(d_data, file_size, d_keys, 
+                                                   num_keys, key_length, d_found, d_found_index);
+    
+    cudaStatus = cudaGetLastError();
+    if (cudaStatus != cudaSuccess) {
+        cudaFree(d_data);
+        cudaFree(d_keys);
+        cudaFree(d_found);
+        cudaFree(d_found_index);
+        return cudaStatus;
+    }
+    
+    cudaStatus = cudaDeviceSynchronize();
+    if (cudaStatus != cudaSuccess) {
+        cudaFree(d_data);
+        cudaFree(d_keys);
+        cudaFree(d_found);
+        cudaFree(d_found_index);
+        return cudaStatus;
+    }
+    
+    cudaMemcpy(&h_found, d_found, sizeof(bool), cudaMemcpyDeviceToHost);
+    cudaMemcpy(&h_found_index, d_found_index, sizeof(int), cudaMemcpyDeviceToHost);
+    
+    if (h_found && h_found_index >= 0 && h_found_index < num_keys) {
+        char* successful_key = new char[key_length + 1];
+        cudaMemcpy(successful_key, d_keys + h_found_index * key_length, key_length, cudaMemcpyDeviceToHost);
+        successful_key[key_length] = '\0';
+        
+        strncpy(found_key, successful_key, max_key_length);
+        
+        char output_file[256];
+        snprintf(output_file, sizeof(output_file), "%s/decrypted_with_%s.xls", output_dir, successful_key);
+        
+        cudaError_t decrypt_status = rc4_decrypt_excel_file(input_file, output_file, successful_key);
+        
+        delete[] successful_key;
+        
+        cudaFree(d_data);
+        cudaFree(d_keys);
+        cudaFree(d_found);
+        cudaFree(d_found_index);
+        
+        return decrypt_status;
+    }
+    
+    cudaFree(d_data);
+    cudaFree(d_keys);
+    cudaFree(d_found);
+    cudaFree(d_found_index);
+    
+    return cudaErrorUnknown;
 }
 
 std::vector<std::string> generate_comprehensive_base_keys() {
@@ -248,9 +346,8 @@ int main() {
     auto suffixes = generate_comprehensive_suffixes();
     auto prefixes = generate_comprehensive_prefixes();
     
-    printf("📋 Base keys: %zu\n", base_keys.size());
-    printf("📋 Suffixes: %zu\n", suffixes.size());
-    printf("📋 Prefixes: %zu\n", prefixes.size());
+    printf("📋 Base keys: %zu, Suffixes: %zu, Prefixes: %zu\n", 
+           base_keys.size(), suffixes.size(), prefixes.size());
     
     size_t total_combinations = base_keys.size() * suffixes.size() * prefixes.size();
     printf("🎯 Total possible combinations: %zu\n", total_combinations);
@@ -259,14 +356,65 @@ int main() {
     const int NUM_WORKERS = 4;  
     const int BATCH_SIZE = 1000; 
     
-    printf("🚀 Menjalankan %d workers paralel (batch size: %d keys)\n", NUM_WORKERS, BATCH_SIZE);
-    printf("⏳ Memulai brute force paralel...\n\n");
+    printf("🚀 Starting %d parallel workers (batch size: %d keys)\n", NUM_WORKERS, BATCH_SIZE);
+    printf("⏳ Starting parallel brute force...\n\n");
     
     std::vector<std::thread> workers;
     
     for (int i = 0; i < NUM_WORKERS; i++) {
-        workers.emplace_back(brute_force_worker, encrypted_file, output_dir,
-                           base_keys, suffixes, prefixes, BATCH_SIZE);
+        workers.emplace_back([encrypted_file, output_dir, base_keys, suffixes, prefixes, batch_size = BATCH_SIZE]() {
+            char found_key[256] = {0};
+            
+            while (!key_found) {
+                int current_offset;
+                int batch_number;
+                {
+                    std::lock_guard<std::mutex> lock(key_mutex);
+                    current_offset = current_batch * batch_size;
+                    batch_number = current_batch.load(); 
+                    current_batch++;
+                }
+                
+                std::vector<const char*> keys = generate_key_batch(base_keys, suffixes, prefixes, batch_size, current_offset);
+                
+                if (keys.empty()) {
+                    break;
+                }
+                
+                printf("\r🔍 Testing batch %d (%d keys)... Total tested: %d", 
+                       batch_number, (int)keys.size(), total_tested.load());
+                fflush(stdout);
+                
+                int key_length = 0;
+                for (const char* key : keys) {
+                    key_length = std::max(key_length, (int)strlen(key));
+                }
+                
+                cudaError_t status = rc4_bruteforce_excel_file_quiet(encrypted_file, output_dir,
+                                                                      keys.data(), keys.size(),
+                                                                      key_length, found_key, sizeof(found_key));
+                
+                // Update total tested
+                total_tested += keys.size();
+                
+                // Cleanup
+                free_keys(keys);
+                
+                if (status == cudaSuccess) {
+                    {
+                        std::lock_guard<std::mutex> lock(key_mutex);
+                        if (!key_found) {
+                            key_found = true;
+                            found_key_str = found_key;
+                            key_cv.notify_all();
+                        }
+                    }
+                    break;
+                }
+                
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+        });
     }
     
     {
@@ -282,18 +430,22 @@ int main() {
         }
     }
     
+    // Clear the progress line
+    printf("\r");
+    
     if (!found_key_str.empty()) {
-        printf("\n🎉 BRUTE FORCE BERHASIL!\n");
-        printf("✅ Key yang ditemukan: '%s'\n", found_key_str.c_str());
-        printf("✅ File telah didekripsi: ./decrypted_with_%s.xls\n", found_key_str.c_str());
+        printf("\n🎉 BRUTE FORCE SUCCESSFUL!\n");
+        printf("✅ Key found: '%s'\n", found_key_str.c_str());
+        printf("✅ File decrypted: ./decrypted_with_%s.xls\n", found_key_str.c_str());
+        printf("📊 Total keys tested: %d\n", total_tested.load());
         
         return 0;
     } else {
-        printf("\n❌ Key tidak ditemukan setelah mencoba banyak kombinasi\n");
+        printf("\n❌ Key not found after testing %d keys\n", total_tested.load());
         printf("💡 Tips:\n");
-        printf("   - Coba tambahkan lebih banyak pattern key\n");
-        printf("   - Periksa apakah file benar-benar terenkripsi RC4\n");
-        printf("   - Gunakan dictionary attack dengan wordlist khusus\n");
+        printf("   - Try adding more key patterns\n");
+        printf("   - Check if file is actually RC4 encrypted\n");
+        printf("   - Use dictionary attack with custom wordlist\n");
         
         return 1;
     }
