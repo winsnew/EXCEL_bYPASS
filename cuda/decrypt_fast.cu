@@ -64,7 +64,7 @@ __device__ void generate_password(char* password, int max_len, unsigned long lon
     const char charset[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     const int charset_size = sizeof(charset) - 1;
     
-    int len = 4 + (seed % 5);
+    int len = 4 + ((seed >> 8) % 5);  
     *password_len = len;
     
     for (int i = 0; i < len && i < max_len - 1; i++) {
