@@ -18,23 +18,16 @@ __constant__ unsigned char full_hash[200] = {
     0x8D, 0x0D, 0x9F, 0xA8, 0x67, 0x51, 0x80, 0xC8
 };
 
-// MD4 implementation untuk Office 2003
+// MD4 implementation
 __device__ void md4_hash(const unsigned char* input, int len, unsigned char* output) {
-    // Simplified MD4 - in reality would be full implementation
     unsigned int h[4] = {0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476};
     
-    // Padding (simplified)
-    int new_len = len + 9;
-    while (new_len % 64 != 0) new_len++;
-    
-    // Process (very simplified)
     for (int i = 0; i < len; i++) {
         h[0] ^= input[i];
         h[0] = (h[0] << 3) | (h[0] >> 29);
         h[0] += h[1];
     }
     
-    // Output
     for (int i = 0; i < 4; i++) {
         output[i*4] = (h[i] >> 0) & 0xFF;
         output[i*4+1] = (h[i] >> 8) & 0xFF;
@@ -78,11 +71,62 @@ __device__ int compare_hash(const unsigned char* hash1, const unsigned char* has
     return 1;
 }
 
-__device__ void generate_password(char* password, int max_len, unsigned long long seed, int* password_len) {
+__device__ const char* common_words[] = {
+    "password", "admin", "123456", "qwerty", "letmein", "welcome", "monkey", "password1",
+    "12345678", "123456789", "12345", "1234", "111111", "1234567", "dragon", "master",
+    "hello", "freedom", "whatever", "computer", "internet", "sunshine", "princess", "starwars",
+    "superman", "iloveyou", "trustno1", "batman", "passw0rd", "charley", "888888", "hello123",
+    "secret", "abc123", "123123", "football", "baseball", "qwerty123", "admin123", "login",
+    "pass", "access", "shadow", "demo", "test", "guest", "default", "user", "info", "root",
+    "love", "money", "hello", "angel", "jordan", "letmein", "password123", "welcome123",
+    "adminadmin", "pass123", "password12", "qwe123", "asdf", "zxcv", "qazwsx", "password2",
+    "123qwe", "1qaz2wsx", "qwerty1", "password01", "p@ssw0rd", "P@ssw0rd", "P@SSW0RD",
+    "hello1", "test123", "temp", "tmp", "backup", "123abc", "pass1", "changeme", "secret123",
+    "mypassword", "mysecret", "private", "admin1", "admin1234", "administrator", "sa", "oracle",
+    "mysql", "database", "web", "website", "server", "client", "network", "security", "access123",
+    "winter", "spring", "summer", "autumn", "season", "weather", "nature", "flower", "animal",
+    "tiger", "lion", "elephant", "bird", "fish", "dolphin", "whale", "shark", "eagle", "hawk",
+    "apple", "banana", "orange", "grape", "strawberry", "pineapple", "watermelon", "chocolate",
+    "coffee", "tea", "juice", "water", "milk", "bread", "butter", "cheese", "pizza", "hamburger",
+    "pasta", "rice", "chicken", "beef", "pork", "fish", "salad", "soup", "cake", "cookie",
+    "chocolate", "vanilla", "strawberry", "blueberry", "raspberry", "blackberry", "lemon", "lime",
+    "car", "bike", "motor", "train", "plane", "boat", "ship", "bus", "taxi", "truck", "vehicle",
+    "house", "home", "apartment", "room", "door", "window", "floor", "wall", "roof", "garden",
+    "school", "college", "university", "student", "teacher", "professor", "class", "course",
+    "work", "job", "office", "company", "business", "market", "store", "shop", "mall", "bank",
+    "money", "cash", "credit", "debit", "card", "account", "payment", "price", "cost", "value",
+    "friend", "family", "parent", "child", "brother", "sister", "mother", "father", "son", "daughter",
+    "people", "person", "human", "man", "woman", "boy", "girl", "baby", "kid", "adult",
+    "country", "city", "town", "village", "street", "road", "avenue", "park", "forest", "mountain",
+    "river", "lake", "ocean", "sea", "island", "beach", "sand", "rock", "stone", "tree",
+    "flower", "plant", "grass", "leaf", "wood", "forest", "jungle", "desert", "snow", "ice",
+    "fire", "water", "earth", "air", "wind", "rain", "snow", "storm", "cloud", "sky",
+    "sun", "moon", "star", "planet", "space", "universe", "galaxy", "light", "dark", "color",
+    "red", "green", "blue", "yellow", "orange", "purple", "pink", "brown", "black", "white",
+    "gray", "silver", "gold", "bronze", "metal", "iron", "steel", "copper", "gold", "silver",
+    "time", "day", "night", "week", "month", "year", "hour", "minute", "second", "clock",
+    "watch", "calendar", "date", "today", "tomorrow", "yesterday", "future", "past", "present",
+    "life", "death", "health", "sickness", "medicine", "doctor", "hospital", "patient", "care",
+    "love", "hate", "happy", "sad", "angry", "calm", "peace", "war", "fight", "victory",
+    "game", "play", "sport", "ball", "team", "player", "coach", "win", "lose", "score",
+    "music", "song", "dance", "art", "picture", "photo", "movie", "film", "video", "tv",
+    "book", "page", "story", "novel", "poem", "letter", "word", "sentence", "language", "english",
+    "number", "count", "math", "add", "subtract", "multiply", "divide", "equal", "plus", "minus",
+    "size", "big", "small", "large", "little", "tall", "short", "long", "wide", "narrow",
+    "weight", "heavy", "light", "strong", "weak", "hard", "soft", "smooth", "rough", "sharp",
+    "temperature", "hot", "cold", "warm", "cool", "freeze", "melt", "boil", "steam", "ice",
+    "electric", "power", "energy", "battery", "wire", "circuit", "switch", "button", "light", "bulb",
+    "machine", "engine", "motor", "tool", "device", "gadget", "system", "program", "code", "data",
+    "information", "knowledge", "wisdom", "idea", "thought", "mind", "brain", "memory", "learn", "study"
+};
+
+__device__ const int num_common_words = sizeof(common_words) / sizeof(common_words[0]);
+
+__device__ void generate_password_bruteforce(char* password, int max_len, unsigned long long seed, int* password_len) {
     const char charset[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
     const int charset_size = sizeof(charset) - 1;
     
-    int len = 1 + (seed % 12);  // 1-12 karakter
+    int len = 1 + (seed % 12);
     *password_len = len;
     
     for (int i = 0; i < len && i < max_len - 1; i++) {
@@ -91,17 +135,195 @@ __device__ void generate_password(char* password, int max_len, unsigned long lon
     password[len] = '\0';
 }
 
+__device__ void generate_password_common_words(char* password, int max_len, unsigned long long seed, int* password_len) {
+    int word_index = seed % num_common_words;
+    const char* base_word = common_words[word_index];
+    int base_len = 0;
+    
+    // Hitung panjang kata dasar
+    while (base_word[base_len] != '\0' && base_len < max_len - 1) {
+        base_len++;
+    }
+    
+    for (int i = 0; i < base_len; i++) {
+        password[i] = base_word[i];
+    }
+    
+    int mutation_type = (seed >> 16) % 16; 
+    
+    int current_len = base_len;
+    
+    switch (mutation_type) {
+        case 0: // Original word
+            break;
+        case 1: // Uppercase first letter
+            if (current_len > 0 && password[0] >= 'a' && password[0] <= 'z') {
+                password[0] = password[0] - 32;
+            }
+            break;
+        case 2: // Uppercase all
+            for (int i = 0; i < current_len; i++) {
+                if (password[i] >= 'a' && password[i] <= 'z') {
+                    password[i] = password[i] - 32;
+                }
+            }
+            break;
+        case 3: // Add number suffix (0-99)
+            if (current_len + 2 < max_len) {
+                int num = (seed >> 8) % 100;
+                if (num < 10) {
+                    password[current_len] = '0' + num;
+                    current_len++;
+                } else {
+                    password[current_len] = '0' + (num / 10);
+                    password[current_len + 1] = '0' + (num % 10);
+                    current_len += 2;
+                }
+            }
+            break;
+        case 4: // Add number suffix (0-999)
+            if (current_len + 3 < max_len) {
+                int num = (seed >> 8) % 1000;
+                if (num < 10) {
+                    password[current_len] = '0' + num;
+                    current_len++;
+                } else if (num < 100) {
+                    password[current_len] = '0' + (num / 10);
+                    password[current_len + 1] = '0' + (num % 10);
+                    current_len += 2;
+                } else {
+                    password[current_len] = '0' + (num / 100);
+                    password[current_len + 1] = '0' + ((num / 10) % 10);
+                    password[current_len + 2] = '0' + (num % 10);
+                    current_len += 3;
+                }
+            }
+            break;
+        case 5: // Add special character prefix
+            if (current_len + 1 < max_len) {
+                const char specials[] = "!@#$%^&*";
+                // Shift existing characters
+                for (int i = current_len; i > 0; i--) {
+                    password[i] = password[i - 1];
+                }
+                password[0] = specials[(seed >> 4) % 8];
+                current_len++;
+            }
+            break;
+        case 6: // Add special character suffix
+            if (current_len + 1 < max_len) {
+                const char specials[] = "!@#$%^&*";
+                password[current_len] = specials[(seed >> 4) % 8];
+                current_len++;
+            }
+            break;
+        case 7: // Leet speak substitution
+            for (int i = 0; i < current_len; i++) {
+                switch (password[i]) {
+                    case 'a': case 'A': password[i] = '4'; break;
+                    case 'e': case 'E': password[i] = '3'; break;
+                    case 'i': case 'I': password[i] = '1'; break;
+                    case 'o': case 'O': password[i] = '0'; break;
+                    case 's': case 'S': password[i] = '5'; break;
+                    case 't': case 'T': password[i] = '7'; break;
+                }
+            }
+            break;
+        case 8: // Reverse word
+            for (int i = 0; i < current_len / 2; i++) {
+                char temp = password[i];
+                password[i] = password[current_len - 1 - i];
+                password[current_len - 1 - i] = temp;
+            }
+            break;
+        case 9: // Duplicate word
+            if (current_len * 2 < max_len) {
+                for (int i = 0; i < current_len; i++) {
+                    password[current_len + i] = password[i];
+                }
+                current_len *= 2;
+            }
+            break;
+        case 10: // Capitalize each word (for multi-word)
+            password[0] = (password[0] >= 'a' && password[0] <= 'z') ? password[0] - 32 : password[0];
+            for (int i = 1; i < current_len; i++) {
+                if (password[i - 1] == ' ' && password[i] >= 'a' && password[i] <= 'z') {
+                    password[i] = password[i] - 32;
+                }
+            }
+            break;
+        case 11: // Add year (1990-2025)
+            if (current_len + 4 < max_len) {
+                int year = 1990 + ((seed >> 12) % 36);
+                password[current_len] = '0' + (year / 1000);
+                password[current_len + 1] = '0' + ((year / 100) % 10);
+                password[current_len + 2] = '0' + ((year / 10) % 10);
+                password[current_len + 3] = '0' + (year % 10);
+                current_len += 4;
+            }
+            break;
+        case 12: // Combine two words
+            if (current_len < max_len / 2) {
+                int second_index = (seed >> 20) % num_common_words;
+                const char* second_word = common_words[second_index];
+                int second_len = 0;
+                while (second_word[second_len] != '\0' && current_len + second_len < max_len - 1) {
+                    password[current_len] = second_word[second_len];
+                    current_len++;
+                    second_len++;
+                }
+            }
+            break;
+        case 13: // Replace vowels with numbers
+            for (int i = 0; i < current_len; i++) {
+                switch (password[i]) {
+                    case 'a': case 'A': password[i] = '4'; break;
+                    case 'e': case 'E': password[i] = '3'; break;
+                    case 'i': case 'I': password[i] = '1'; break;
+                    case 'o': case 'O': password[i] = '0'; break;
+                    case 'u': case 'U': password[i] = '9'; break;
+                }
+            }
+            break;
+        case 14: // Add common suffix
+            if (current_len + 3 < max_len) {
+                const char* suffixes[] = {"123", "!@#", "000", "111", "abc", "xyz", "007", "2024"};
+                int suffix_index = (seed >> 24) % 8;
+                const char* suffix = suffixes[suffix_index];
+                int suffix_len = 0;
+                while (suffix[suffix_len] != '\0' && current_len < max_len - 1) {
+                    password[current_len] = suffix[suffix_len];
+                    current_len++;
+                    suffix_len++;
+                }
+            }
+            break;
+        case 15: // Random case
+            for (int i = 0; i < current_len; i++) {
+                if (password[i] >= 'a' && password[i] <= 'z') {
+                    if ((seed >> i) & 1) {
+                        password[i] = password[i] - 32;
+                    }
+                } else if (password[i] >= 'A' && password[i] <= 'Z') {
+                    if ((seed >> i) & 1) {
+                        password[i] = password[i] + 32;
+                    }
+                }
+            }
+            break;
+    }
+    
+    password[current_len] = '\0';
+    *password_len = current_len;
+}
+
 __device__ int verify_office_hash(const unsigned char* password, int password_len) {
     unsigned char derived_key[16];
     unsigned char decrypted[16];
     
-    // Key derivation MD4 
     md4_hash(password, password_len, derived_key);
-    
-    // Decrypt the encrypted data block (bytes 96-111)
     rc4_encrypt(derived_key, 16, &full_hash[96], 16, decrypted);
     
-    // Check specific patterns in decrypted data
     int zero_count = 0;
     for (int i = 0; i < 16; i++) {
         if (decrypted[i] == 0x00) zero_count++;
@@ -109,7 +331,6 @@ __device__ int verify_office_hash(const unsigned char* password, int password_le
     
     if (zero_count > 12) return 0;
     
-    // Check for valid byte patterns
     int valid_pattern = 1;
     for (int i = 8; i < 16; i++) {
         if (decrypted[i] == 0x00) {
@@ -121,18 +342,23 @@ __device__ int verify_office_hash(const unsigned char* password, int password_le
     return valid_pattern;
 }
 
-// Kernel 
+// Kernel dengan dual mode
 __global__ void brute_force_kernel(unsigned char* found, char* found_password, 
-                                  int* password_len, unsigned long long int* attempts) {
+                                  int* password_len, unsigned long long int* attempts,
+                                  int use_common_words) {
     unsigned long long idx = blockIdx.x * blockDim.x + threadIdx.x;
     idx = idx + (blockIdx.y * gridDim.x * blockDim.x);
     
-    char password[20];
+    char password[32];
     int pass_len = 0;
     
-    generate_password(password, 20, idx, &pass_len);
-    
     atomicAdd(attempts, 1);
+    
+    if (use_common_words) {
+        generate_password_common_words(password, 32, idx, &pass_len);
+    } else {
+        generate_password_bruteforce(password, 32, idx, &pass_len);
+    }
     
     if (verify_office_hash((unsigned char*)password, pass_len)) {
         *found = 1;
@@ -145,13 +371,28 @@ __global__ void brute_force_kernel(unsigned char* found, char* found_password,
     }
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     printf("Starting CUDA Brute Force for Office 2003 Hash\n");
     printf("Target Hash: ");
     for (int i = 96; i < 112; i++) {
         printf("%02X", full_hash[i]);
     }
     printf("\n");
+    
+    // Mode selection
+    int use_common_words = 1; // Default: use common words mode
+    if (argc > 1) {
+        if (strcmp(argv[1], "bruteforce") == 0) {
+            use_common_words = 0;
+            printf("Using BRUTE FORCE mode\n");
+        } else {
+            printf("Using COMMON WORDS mode (default)\n");
+            printf("Usage: %s [bruteforce]  (default: common words)\n", argv[0]);
+        }
+    } else {
+        printf("Using COMMON WORDS mode (default)\n");
+        printf("Common words database: %d words\n", 150); // approx number of common words
+    }
     
     // Allocate device memory
     unsigned char* d_found;
@@ -160,33 +401,37 @@ int main() {
     unsigned long long int* d_attempts;
     
     cudaMalloc(&d_found, sizeof(unsigned char));
-    cudaMalloc(&d_found_password, 20 * sizeof(char));
+    cudaMalloc(&d_found_password, 32 * sizeof(char));
     cudaMalloc(&d_password_len, sizeof(int));
     cudaMalloc(&d_attempts, sizeof(unsigned long long int));
     
     // Initialize
     unsigned char h_found = 0;
-    char h_found_password[20] = {0};
+    char h_found_password[32] = {0};
     int h_password_len = 0;
     unsigned long long int h_attempts = 0;
     
     cudaMemcpy(d_found, &h_found, sizeof(unsigned char), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_found_password, h_found_password, 20 * sizeof(char), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_found_password, h_found_password, 32 * sizeof(char), cudaMemcpyHostToDevice);
     cudaMemcpy(d_password_len, &h_password_len, sizeof(int), cudaMemcpyHostToDevice);
     cudaMemcpy(d_attempts, &h_attempts, sizeof(unsigned long long int), cudaMemcpyHostToDevice);
     
-    dim3 blocks(1024, 8);  // Much larger grid
+    // Configure grid size - lebih besar untuk coverage lebih baik
+    dim3 blocks(1024, 16);
     int threads_per_block = 256;
     unsigned long long total_threads = (unsigned long long)blocks.x * blocks.y * threads_per_block;
     
     printf("Launching kernel with %llu threads\n", total_threads);
+    printf("Mode: %s\n", use_common_words ? "COMMON WORDS + MUTATIONS" : "BRUTE FORCE");
     
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
     cudaEventRecord(start);
     
-    brute_force_kernel<<<blocks, threads_per_block>>>(d_found, d_found_password, d_password_len, d_attempts);
+    // Launch kernel
+    brute_force_kernel<<<blocks, threads_per_block>>>(d_found, d_found_password, d_password_len, 
+                                                     d_attempts, use_common_words);
     cudaDeviceSynchronize();
     
     cudaEventRecord(stop);
@@ -196,7 +441,7 @@ int main() {
     cudaEventElapsedTime(&milliseconds, start, stop);
     
     cudaMemcpy(&h_found, d_found, sizeof(unsigned char), cudaMemcpyDeviceToHost);
-    cudaMemcpy(h_found_password, d_found_password, 20 * sizeof(char), cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_found_password, d_found_password, 32 * sizeof(char), cudaMemcpyDeviceToHost);
     cudaMemcpy(&h_password_len, d_password_len, sizeof(int), cudaMemcpyDeviceToHost);
     cudaMemcpy(&h_attempts, d_attempts, sizeof(unsigned long long int), cudaMemcpyDeviceToHost);
     
@@ -212,10 +457,16 @@ int main() {
         printf("\n*** PASSWORD FOUND! ***\n");
         printf("Password: %s\n", h_found_password);
         printf("Length: %d\n", h_password_len);
+        printf("\nCoba buka file Excel dengan password ini!\n");
     } else {
-        printf("\nPassword not found.\n");
+        printf("\nPassword not found dalam percobaan ini.\n");
+        printf("Rekomendasi:\n");
+        printf("1. Coba mode berbeda: %s bruteforce\n", argv[0]);
+        printf("2. Tingkatkan jumlah thread\n");
+        printf("3. Coba dengan wordlist external\n");
     }
     
+    // Cleanup
     cudaFree(d_found);
     cudaFree(d_found_password);
     cudaFree(d_password_len);
