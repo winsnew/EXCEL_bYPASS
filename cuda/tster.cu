@@ -84,7 +84,6 @@ void brute_force_worker(const char* encrypted_file, const char* output_dir,
             break;
         }
         
-        // Simple one-line output
         printf("\r🔍 Testing batch %d (%d keys)... Total tested: %d", 
                batch_number, (int)keys.size(), total_tested.load());
         fflush(stdout);
@@ -430,7 +429,6 @@ int main() {
         }
     }
     
-    // Clear the progress line
     printf("\r");
     
     if (!found_key_str.empty()) {
