@@ -4,6 +4,8 @@
 #include <string.h>
 #include <vector>
 #include <algorithm>
+#include <string>
+#include <iostream>
 
 std::vector<const char*> generate_keys(const std::vector<std::string>& base_keys, 
                                       const std::vector<std::string>& suffixes = {},
