@@ -4,7 +4,7 @@ TARGET = excel_bypass
 SRCDIR = .
 COMMONDIR = common
 
-SOURCES = $(SRCDIR)/main.c
+SOURCES = $(SRCDIR)/main.c $(COMMONDIR)/file_util.c
 INCLUDES = -I$(COMMONDIR)
 
 $(TARGET): $(SOURCES)
