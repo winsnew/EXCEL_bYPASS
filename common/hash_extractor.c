@@ -16,10 +16,12 @@ XLSFile* read_xls_file(const char *filename) {
     xls_file->size = size;
     xls_file->is_encrypted = 0;
     xls_file->hash_length = 0;
+    xls_file->encryption_type = 0;
     memset(xls_file->salt, 0, sizeof(xls_file->salt));
     memset(xls_file->encrypted_verifier, 0, sizeof(xls_file->encrypted_verifier));
     memset(xls_file->encrypted_verifier_hash, 0, sizeof(xls_file->encrypted_verifier_hash));
     memset(xls_file->hash_data, 0, sizeof(xls_file->hash_data));
+    memset(xls_file->encryption_format, 0, sizeof(xls_file->encryption_format));
     
     size_t bytes_read = fread(xls_file->data, 1, size, file);
     fclose(file);
@@ -37,6 +39,20 @@ void free_xls_file(XLSFile *file) {
     if (file) {
         free(file->data);
         free(file);
+    }
+}
+
+const char* get_encryption_type_name(XLSFile *file) {
+    if (file->encryption_type == 1) {
+        return "Office 2007+ (AES)";
+    } else if (file->encryption_type == 2) {
+        return "Office 2003 (RC4)";
+    } else if (file->encryption_type == 3) {
+        return "Office 97 (RC4)";
+    } else if (file->is_encrypted) {
+        return "Unknown Encryption";
+    } else {
+        return "Not Encrypted";
     }
 }
 
@@ -75,6 +91,8 @@ int extract_office_2003_hash(XLSFile *file) {
                 file->hash_length = copy_len;
                 memcpy(file->hash_data, file->data + i + 4, copy_len);
                 file->is_encrypted = 1;
+                file->encryption_type = 2; 
+                strcpy(file->encryption_format, "Office 2003 (RC4)");
                 return 1;
             }
         }
@@ -118,6 +136,8 @@ int extract_office_2007plus_hash(XLSFile *file) {
                 printf("\n");
                 
                 file->is_encrypted = 1;
+                file->encryption_type = 1; // Office 2007+
+                strcpy(file->encryption_format, "Office 2007+ (AES)");
                 
                 snprintf((char*)file->hash_data, MAX_HASH_LENGTH,
                     "$office$*2007*20*%d*%d*",
@@ -151,6 +171,8 @@ int extract_office_2007plus_hash(XLSFile *file) {
         if (memcmp(file->data + i, verifier_prefix, 44) == 0) {
             printf("Found crypto provider at offset: 0x%08lX\n", i);
             file->is_encrypted = 1;
+            file->encryption_type = 1; 
+            strcpy(file->encryption_format, "Office 2007+ (AES)");
         }
     }
     
@@ -165,15 +187,15 @@ int extract_xls_hash(XLSFile *file) {
         printf("Error: Not a valid Excel file\n");
         return 0;
     }
-    printf("✓ Valid Excel file signature\n");
+    printf("Valid Excel file signature\n");
     
     if (extract_office_2007plus_hash(file)) {
-        printf("✓ Office 2007+ hash extracted successfully\n");
+        printf("Office 2007+ hash extracted successfully\n");
         return 1;
     }
     
     if (extract_office_2003_hash(file)) {
-        printf("✓ Office 2003 hash extracted successfully\n");
+        printf("Office 2003 hash extracted successfully\n");
         return 1;
     }
     
@@ -181,8 +203,9 @@ int extract_xls_hash(XLSFile *file) {
     if (enc_offset != -1) {
         printf("✓ Encryption header found\n");
         file->is_encrypted = 1;
+        file->encryption_type = 0; // Unknown type
+        strcpy(file->encryption_format, "Unknown Encryption");
         
-        // Ekstrak lebih banyak data untuk format lengkap
         size_t extract_size = (file->size - enc_offset > MAX_HASH_LENGTH) ? 
                              MAX_HASH_LENGTH : file->size - enc_offset;
         memcpy(file->hash_data, file->data + enc_offset, extract_size);
@@ -202,6 +225,7 @@ void print_complete_hash(XLSFile *file) {
     
     printf("\n=== COMPLETE HASH DATA ===\n");
     printf("Encryption detected: YES\n");
+    printf("Encryption type: %s\n", get_encryption_type_name(file));
     printf("Hash length: %zu bytes\n", file->hash_length);
     
     printf("Hash data (hex): ");
@@ -229,9 +253,9 @@ void print_hash_info(XLSFile *file) {
     
     printf("\n=== HASH INFORMATION ===\n");
     printf("Encryption detected: %s\n", file->is_encrypted ? "YES" : "NO");
+    printf("Encryption type: %s\n", get_encryption_type_name(file));
     printf("Hash length: %zu bytes\n", file->hash_length);
     
-    // Tampilkan preview singkat
     if (file->hash_length > 0) {
         printf("Hash data preview (hex): ");
         for (size_t i = 0; i < file->hash_length && i < 64; i++) {
@@ -258,11 +282,6 @@ void print_hash_info(XLSFile *file) {
     
     print_complete_hash(file);
     
-    printf("\n=== FOR CRACKING TOOLS ===\n");
-    if (file->hash_length < MAX_HASH_LENGTH && file->hash_length > 0) {
-        printf("John/Hashcat format:\n");
-        printf("%s\n", file->hash_data);
-    }
 }
 
 void save_hash_to_file(XLSFile *file, const char *output_file) {
@@ -277,9 +296,13 @@ void save_hash_to_file(XLSFile *file, const char *output_file) {
         return;
     }
     
+    fprintf(f, "=== EXCEL HASH EXTRACTION RESULT ===\n");
     fprintf(f, "Encryption detected: YES\n");
+    fprintf(f, "Encryption type: %s\n", get_encryption_type_name(file));
     fprintf(f, "Hash length: %zu bytes\n", file->hash_length);
+    fprintf(f, "File format: %s\n", file->encryption_format);
     
+    fprintf(f, "\n=== RAW HASH DATA ===\n");
     fprintf(f, "Hash data (hex): ");
     for (size_t i = 0; i < file->hash_length; i++) {
         fprintf(f, "%02X", file->hash_data[i]);
@@ -297,11 +320,17 @@ void save_hash_to_file(XLSFile *file, const char *output_file) {
     fprintf(f, "\n");
     
     if (file->hash_length < MAX_HASH_LENGTH && strlen((char*)file->hash_data) > 0) {
-        fprintf(f, "\nJohn/Hashcat format:\n");
+        fprintf(f, "\n=== CRACKING TOOLS FORMAT ===\n");
         fprintf(f, "%s\n", file->hash_data);
+        
     }
+    
+    fprintf(f, "\n=== EXTRACTION INFO ===\n");
+    fprintf(f, "Extracted by: Excel Hash Extractor Tool\n");
+    fprintf(f, "Timestamp: %s", __DATE__);
     
     fclose(f);
     
     printf("Complete hash data saved to: %s\n", output_file);
+    printf("Encryption type: %s\n", get_encryption_type_name(file));
 }

@@ -19,6 +19,7 @@ typedef struct {
     uint8_t encrypted_verifier_hash[16];
     uint8_t hash_data[MAX_HASH_LENGTH];
     size_t hash_length;
+    char encryption_format[50];  
 } XLSFile;
 
 // Function prototypes
@@ -31,5 +32,6 @@ int extract_office_2003_hash(XLSFile *file);
 int extract_office_2007plus_hash(XLSFile *file);
 void save_hash_to_file(XLSFile *file, const char *output_file);
 void print_complete_hash(XLSFile *file); 
+const char* get_encryption_type_name(XLSFile *file);  
 
 #endif

@@ -49,6 +49,7 @@ int main(int argc, char *argv[]) {
     if (extract_xls_hash(xls_file)) {
         printf("\n=== COMPLETE HASH OUTPUT ===\n");
         printf("Encryption detected: YES\n");
+        printf("Encryption type: %s\n", get_encryption_type_name(xls_file));
         printf("Hash length: %zu bytes\n", xls_file->hash_length);
         
         printf("Hash data (hex): ");
@@ -74,9 +75,8 @@ int main(int argc, char *argv[]) {
         }
         
         printf("\nHash extraction successful!\n");
-        printf("You can now use cracking tools like:\n");
-        printf("  john --format=office hash.txt\n");
-        printf("  hashcat -m 9400 hash.txt wordlist.txt\n");
+        printf("Encryption type: %s\n", get_encryption_type_name(xls_file));
+        
     } else {
         printf("\nFailed to extract hash\n");
         printf("Possible reasons:\n");
