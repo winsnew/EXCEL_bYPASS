@@ -47,6 +47,26 @@ int main(int argc, char *argv[]) {
     printf("File size: %zu bytes\n", xls_file->size);
     
     if (extract_xls_hash(xls_file)) {
+        printf("\n=== COMPLETE HASH OUTPUT ===\n");
+        printf("Encryption detected: YES\n");
+        printf("Hash length: %zu bytes\n", xls_file->hash_length);
+        
+        printf("Hash data (hex): ");
+        for (size_t i = 0; i < xls_file->hash_length; i++) {
+            printf("%02X", xls_file->hash_data[i]);
+        }
+        printf("\n");
+        
+        printf("Hash data (ASCII): ");
+        for (size_t i = 0; i < xls_file->hash_length; i++) {
+            if (xls_file->hash_data[i] >= 32 && xls_file->hash_data[i] <= 126) {
+                printf("%c", xls_file->hash_data[i]);
+            } else {
+                printf(".");
+            }
+        }
+        printf("\n");
+        
         print_hash_info(xls_file);
         
         if (output_file) {
